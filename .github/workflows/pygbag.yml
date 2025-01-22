@@ -14,7 +14,7 @@ jobs:
             python -m pip install pygame-ce
             python -m packitup -s $GITHUB_WORKSPACE/Samples/AsteroidShooter -o $GITHUB_WORKSPACE/web-deploy
             python -m pip install pygbag
-            python -m pygbag --build $GITHUB_WORKSPACE/web-deploy/AsteroidShooter
+            python -m pygbag --build --app_name "Asteroid Continuum 1983" --ume_block 0 --can_close 1 --icon $GITHUB_WORKSPACE/Samples/Assets/favicon.png --template $GITHUB_WORKSPACE/Samples/AsteroidShooter/default.tmpl $GITHUB_WORKSPACE/web-deploy/AsteroidShooter
     - name : "Upload to GitHub pages branch gh-pages"
       uses: JamesIves/github-pages-deploy-action@4.1.7
       with:
