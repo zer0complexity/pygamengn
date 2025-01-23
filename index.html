@@ -3,7 +3,7 @@
 print("""
 Loading asteroidshooter from asteroidshooter.apk
     Pygbag Version : 0.9.2
-    Template Version : 0.9.0
+    Template Version : 0.9.3
     Python  : 3.12
     CDN URL : https://pygame-web.github.io/archives/0.9/
     Screen  : 1280x720
@@ -16,12 +16,12 @@ Loading asteroidshooter from asteroidshooter.apk
 
 
 # screen pixels (real, hardware)
-WIDTH=1024  # 1280
-HEIGHT=600  # 720
+WIDTH=1280  # 1280
+HEIGHT=720  # 720
 
 # reference/idealized screen pixels
-REFX = 1980
-REFY = 1080
+REFX = 1280
+REFY = 720
 
 def u(real, ref, v):
     if abs(v)<0.9999999:
@@ -56,45 +56,124 @@ async def custom_site():
     import platform
     import json
     from pathlib import Path
-
-
-
     import embed
-
-
-    platform.document.body.style.background = "#7f7f7f"
-
     import pygame
+    import time
 
-    def compose():
-        pygame.display.update()
-        window.chromakey(None, *screen.get_colorkey(), 40)
+    platform.document.body.style.background = "#000000"
+
+    class LoadScreen():
+        """
+        Render and track a progress bar as well as a splash screen while resources are being loaded.
+
+        All widths, heights, and positions this class uses are normalized to the range [0...1]. When the splash image
+        and progress bar are drawn to the screen, the normalized numbers are converted to pygame's screen units.
+
+        Initially only the progress bar is shown, as the splash image is loaded with the apk. When the apk is fully
+        loaded the splash image will be presented on the screen, along with the progress bar.
+        """
+        def __init__(
+            self,
+            screen: pygame.Surface,
+            bar_width: float = 1.0,
+            bar_height: float = 0.01,
+            bar_y: float = 0.99,
+            bar_bg_colour = (10, 10, 10),
+            bar_fg_colour = (0, 200, 100),
+            seconds = 10,
+        ):
+            self._screen = screen
+            self._splash = None
+            self._splash_rect = None
+            self._bar_width = bar_width
+            self._bar_height = bar_height
+            self._bar_y = bar_y
+            self._bar_bg_colour = bar_bg_colour
+            self._bar_fg_colour = bar_fg_colour
+            screen_rect = self._screen.get_rect()
+            self._bg_rect = pygame.Rect(
+                (1.0 - self._bar_width) / 2.0 *  screen_rect.width,
+                self._bar_y * screen_rect.height,
+                self._bar_width * screen_rect.width,
+                self._bar_height * screen_rect.height
+            )
+            self._fg_rect = self._bg_rect.copy()
+            self._fg_rect.width = 0
+            self._total_time = seconds
+            self._start_time = 0
+            self._elapsed = 0
+
+        async def go(self):
+            self._elapsed = 0
+            self._start_time = time.time()
+            while self._elapsed <= self._total_time:
+                self._update(self._elapsed / self._total_time)
+                self._elapsed = (time.time() - self._start_time)
+                # print(f"**************************** {self._elapsed}")
+                await asyncio.sleep(.1)
+
+        def load_splash(self, splash_path: str):
+            self._splash = pygame.image.load(splash_path).convert()
+            screen_rect = self._screen.get_rect().copy()
+            screen_rect.height *= (1.0 - self._bar_height)
+            self._splash_rect = self._splash.get_rect().fit(screen_rect)
+            self._splash = pygame.transform.smoothscale(self._splash, self._splash_rect.size)
+
+        def finish(self):
+            self._elapsed = self._total_time
+            self._start_time = time.time() - self._total_time
+
+        def _update(self, progress: float):
+            if self._splash:
+                self._screen.blit(self._splash, self._splash_rect)
+                self._splash = None # Nonify so that it's only blitted once
+            screen_rect = self._screen.get_rect()
+            radius = round(self._bg_rect.height * 0.3)
+            pygame.draw.rect(
+                self._screen,
+                self._bar_bg_colour,
+                self._bg_rect,
+                border_radius = radius,
+            )
+            pygame.draw.rect(
+                self._screen,
+                self._bar_fg_colour,
+                self._bg_rect,
+                width = 1,
+                border_radius = radius,
+            )
+            if progress != 0:
+                self._fg_rect.width = progress * self._bar_width * self._screen.get_rect().width
+                pygame.draw.rect(
+                    self._screen,
+                    self._bar_fg_colour,
+                    self._fg_rect,
+                    border_radius = radius,
+                )
+            pygame.display.update()
+            window.chromakey(None, *self._screen.get_colorkey(), 40)
+
 
     pygame.init()
     pygame.font.init()
 
-    screen = pygame.display.set_mode([ux(.100),uy(.100)], pygame.SRCALPHA, 32)
-    screen.set_colorkey( (0,0,0,0), pygame.RLEACCEL )
-    screen.fill( (0,0,0,0) )
+    screen = pygame.display.set_mode((1280, 720), pygame.SRCALPHA, 32)
+    screen.set_colorkey((0,0,0,0), pygame.RLEACCEL)
 
-    compose()
+    load_screen = LoadScreen(screen)
+    load_screen_task = asyncio.create_task(load_screen.go(), name = "load_screen_task")
 
     platform.window.transfer.hidden = true
     platform.window.canvas.style.visibility = "visible"
 
-
-
     apk = "asteroidshooter.apk"
-
     bundle = "asteroidshooter"
 
     # the C or js loader could do that but be explicit.
     appdir = Path(f"/data/data/{bundle}") # /data/data/asteroidshooter
     appdir.mkdir()
 
-
     # mount apk
-
     cfg = {
         "io": "url",
         "type":"mount",
@@ -104,37 +183,17 @@ async def custom_site():
         },
         "path" : f"/ => {appdir.as_posix()}",
     }
-
-
     track = platform.window.MM.prepare(apk, json.dumps(cfg))
-
-    marginx = ux(.020) # 20%
-    marginy = uy(.045) # 45%
-
-
-    def pg_bar(pos):
-        nonlocal marginx, marginy
-        # resolution of progress bar, recalculate since it may not be know yet.
-        total = track.len or 10  # avoid div0
-        slot = ux(.060)/ total # 60%
-
-        pygame.draw.rect(screen,(10,10,10),( marginx-ux(10), marginy-uy(10), (total*slot)+ux(20), uy(110) ) )
-        pygame.draw.rect(screen,(0,255,0), ( marginx, marginy, track.pos*slot, uy(90)) )
 
     # wait until zip mount + overlayfs is complete
     while not track.ready:
-        pg_bar(track.pos)
-        compose()
         await asyncio.sleep(.1)
 
-    # fill it up in case it was cached and instant download
-    pg_bar(track.len)
-    compose()
-
+    # The splash image is available now -> load it and show it
+    load_screen.load_splash(os.path.join(appdir, "assets", "splash.jpeg"))
 
     # preloader will change dir and prepend it to sys.path
     platform.run_main(PyConfig, loaderhome= appdir / "assets", loadermain=None)
-
 
     # wait preloading complete
     # that includes images and wasm compilation of bundled modules
@@ -151,11 +210,14 @@ async def custom_site():
     __import__(__name__).__file__ = str(main)
 
 
-    # now make a prompt
-    fnt = pygame.sysfont.SysFont("freesans",  uy(80) )
+    # BEGIN WARNING
+    # ui_callback() and the block under if not platform.window.MM.UME will blow up because I deleted definitions
+    # of variables they use. I want to see it blow up and fix it when it does. Load localhost:8000/?-i in the browser
+    # to see the interpreter's output and debug the issue if loading the game appears frozen.
 
+    # now make a prompt
     def ui_callback(pkg, error=None):
-        nonlocal fnt
+        fnt = pygame.sysfont.SysFont("freesans",  uy(80) )
         if error:
             prompt = fnt.render(f"{error}", True, "black")
         else:
@@ -166,7 +228,6 @@ async def custom_site():
 
     # test/wait if user media interaction required
     if not platform.window.MM.UME:
-
         # now make a prompt
         fnt = pygame.sysfont.SysFont("freesans",  uy(80) )
         prompt = fnt.render("Ready to start !", True, "blue")
@@ -178,13 +239,14 @@ async def custom_site():
     """)
         while not platform.window.MM.UME:
             await asyncio.sleep(.1)
-
-    # cleanup
-    screen.fill( (0,0,0,0) )
-    pygame.display.flip()
+    else:
+        print(f" * NOT Waiting for media user engagement : go straight into game *")
+    # END WARNING
 
     await shell.runpy(main, callback=ui_callback)
 
+    load_screen.finish()
+    await load_screen_task
 
 
 import asyncio
@@ -237,8 +299,8 @@ config = {
     _sdl2 : "canvas",
     user_canvas : 0,
     user_canvas_managed : 0,
-    ume_block : 1,
-    can_close : 0,
+    ume_block : 0,
+    can_close : 1,
     archive : "asteroidshooter",
     gui_debug : 3,
     cdn : "https://pygame-web.github.io/archives/0.9/",
@@ -256,18 +318,16 @@ config = {
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes"/>
 
-    <link rel="prefetch" href="https://pygame-web.github.io/archives/0.9/pythonrc.py">
+    <link rel="prefetch" href="https://pygame-web.github.io/archives/0.9/cpythonrc.py">
     <link rel="prefetch" href="https://pygame-web.github.io/archives/0.9/vt/xterm.js">
     <link rel="prefetch" href="https://pygame-web.github.io/archives/0.9/vt/xterm-addon-image.js">
-    <link rel="prefetch" href="https://pygame-web.github.io/archives/0.9/vt/xterm-addon-image.js">
-
 
     <link rel="icon" type="image/png" href="favicon.png" sizes="16x16">
 
     <style>
         #status {
             display: inline-block;
-            vertical-align: top;
+            vertical-align: center;
             margin-top: 20px;
             margin-left: 30px;
             font-weight: bold;
@@ -280,8 +340,8 @@ config = {
         }
 
         div.emscripten { text-align: center; }
-        div.emscripten_border { border: 1px solid black; }
-        div.thick_border { border: 4px solid black; }
+        div.emscripten_border { border: 0px solid black; }
+        div.thick_border { border: 0px solid black; }
 
         /* the canvas *must not* have any border or padding, or mouse coords will be wrong */
         /* average size of droid screen 470dp x 320dp  */
@@ -306,7 +366,7 @@ config = {
             font-family: arial;
             margin: 0;
             padding: none;
-            background-color:powderblue;
+            background-color:black;
         }
 
         .topright{
@@ -330,14 +390,14 @@ config = {
         .trinfo{
            position:relative;
            right:0px;
-           border: 1px solid black;
+           border: 0px solid black;
         }
 
         .framed{
            position:relative;
            top:150px;
            right:10px;
-           border: 1px solid black;
+           border: 0px solid black;
         }
     </style>
 
@@ -391,11 +451,11 @@ height="1px"
             <div id="info" class="trinfo"></div>
 
             <iframe id="iframe" class="framed" name="iframe"
-width="470px" height="90%"
+width="1280px" height="90%"
 allowtransparency="true"
 style="z-index: 10;"
 style="background: #FFFFFF;"
-frameborder="1"
+frameborder="0"
                 allowfullscreen="true"
                 webkitallowfullscreen="true"
                 msallowfullscreen="true"
